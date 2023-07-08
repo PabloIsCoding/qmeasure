@@ -9,6 +9,39 @@ import numpy as np
 import matplotlib.pyplot as plt
 
 def simulate_GBM_ABM_paths(n_paths, n_timesteps, T, r, sigma, S_0, include_start=True, random_seed=None):
+    """
+    Generates paths for Arithmetic Brownian Motion and Geometric Brownian
+    Motion.
+
+    Parameters
+    ----------
+    n_paths : int
+        Number of paths of the stock to simualte (or whatever other underlying).
+    n_timesteps : int
+        Controls the granularity of the simulation. The more timesteps, the
+        higher the accuracy of this discrete approximation of ABM/GBM.
+    T : float
+        Length of the time period to simulate, such that when T=1, the parameter
+        sigma is the volatility over that period. T can be lower or higher than
+        one.
+    r : float
+        Constant interest rate.
+    sigma : float
+        Volatility over a period of Δt=1 (typically annual volatility).
+    S_0 : float
+        Starting value of the series (normally a stock or some other underlying).
+    include_start : Bool, optional
+        Whether to include the S_0 value in these simulations. The default is 
+        True.
+    random_seed : TYPE, optional
+        Random seed. If None, no random seed is specified. The default is None.
+
+    Returns
+    -------
+    dict
+        DESCRIPTION.
+
+    """
     if random_seed is not None:
         np.random.seed(random_seed)
     delta_t = T/float(n_timesteps)
