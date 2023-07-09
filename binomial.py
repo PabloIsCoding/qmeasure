@@ -192,13 +192,19 @@ def value_european_option_BS(S_0, T, sigma, K, r, kind='C'):
 
 if __name__=='__main__':
     import matplotlib.pyplot as plt
-    Ns = list(range(3, 30, 2))+[40, 50, 60, 70, 90, 120, 150, 300, 600, 900, 1200, 1600, 2200, 3000, 6000,9000, 15000, 30000]
-    values = [value_european_option_binomial(S_0=42, T=0.5, sigma=0.2, K=40, r=0.1, kind='P', N=n) for n in Ns]
-    bs_value = value_european_option_BS(S_0=42, T=0.5, sigma=0.2, K=40, r=0.1, kind='P')
+    Ns = list(range(3, 30, 2))+[40, 50, 60, 70, 100, 120, 150, 300, 600, 900, 1200, 1600, 2200, 3000, 6000, 9000]
+    S_0 = 50
+    T = 1
+    r = 0.06
+    sigma = 0.4
+    K = 50
+    values = [value_european_option_binomial(S_0=S_0, T=T, sigma=sigma, K=K, r=r, kind='C', N=n) for n in Ns]
+    print(values)
+    bs_value = value_european_option_BS(S_0=S_0, T=T, sigma=sigma, K=K, r=r, kind='C')
     fig, ax = plt.subplots()
     ax.plot(Ns, np.repeat(bs_value, len(Ns)), label='Black Scholes')
     ax.plot(Ns, values, label='Binomial')
-    ax.set_xlabel('Número de timesteps')
-    ax.set_ylabel('Valor')
+    ax.set_xlabel('Number of timesteps')
+    ax.set_ylabel('Value')
     ax.legend()
     
