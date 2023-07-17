@@ -8,6 +8,11 @@ Created on Sat Jul  8 16:40:30 2023
 import numpy as np
 from scipy.stats import norm, binom
 from math import e
+from numba import njit, float64, int64
+
+CALL, PUT = 0, 1
+EUROPEAN, AMERICAN = 0, 1
+    
 
 def _build_log_matrix(value1, value2, N):
     """
@@ -74,20 +79,41 @@ def _build_underlying_matrix(S_0, u, N):
     S = np.triu(np.exp(_build_log_matrix(np.log(u), np.log(d), N)))
     return S*S_0
 
-def _build_probabilities(p, N, timestep_number):
-    q = 1-p
-    rv = binom(N, p)
-    x = np.arange(N, -1, -1)
-    return rv.pmf(x)
 
-def _european_payoffs(underlying_matrix, K, kind='C'):
-    if kind=='C':
-        payoffs = np.clip(underlying_matrix[:, -1] - K, a_min=0, a_max=np.inf)
-    else:
-        payoffs = np.clip(K-underlying_matrix[:, -1], a_min=0, a_max=np.inf)
-    return payoffs
+@njit(float64[:](float64, float64, float64, float64, float64, float64, int64, int64), fastmath=True, cache=True)
+def _calculate_american_option_crr(S_0, T, sigma, K, r, q=0., option_type=CALL, N=1000):
+    dt = T/float(N)
+    u = np.exp(sigma*np.sqrt(dt))
+    d = 1/u
+    a = np.exp((r-q)*dt)
+    p = (a - d)/(u - d)
+    number_of_upward_moves = np.arange(N, -1, -1) # [0, ..., N]
+    possible_prices = S_0 * u**number_of_upward_moves * d**(N-number_of_upward_moves)
+    discount_dt = np.exp(-r*dt)
+    values = np.clip(possible_prices - K, a_min=0, a_max=np.inf) if option_type == CALL else np.clip(K - possible_prices, a_min=0, a_max=np.inf)
+    option_coef = 1 if option_type == CALL else -1
+    for i in range(1, N+1):
+        possible_prices = possible_prices[:-1] / u
+        expected_values = (values[:-1]*p + np.roll(values, -1)[:-1]*(1-p))*discount_dt # Values at N-i without exercising early
+        payoff = np.clip((possible_prices - K)*option_coef, a_min=0, a_max=np.inf) # early exercise
+        values = np.maximum(payoff, expected_values) # Values at N-i, possibly exercising early
 
-def value_european_option_binomial(S_0, T, sigma, K, r, q=0, kind='C', N=1000):
+        if i == N-1:
+            delta = (values[1] - values[0])/(possible_prices[0] - possible_prices[1])*option_coef
+    return np.array((values[0], delta))
+
+def _calculate_european_option_crr(S_0, T, sigma, K, r, q=0., option_type=CALL, N=1000):
+    dt = T/float(N)
+    u = np.exp(sigma*np.sqrt(dt))
+    d = 1/u
+    a = np.exp((r-q)*dt)
+    p = (a - d)/(u - d)
+    number_of_upward_moves = np.arange(N, -1, -1) # [0, ..., N]
+    possible_prices = S_0 * u**number_of_upward_moves * d**(N-number_of_upward_moves)
+    values = np.clip(possible_prices - K, a_min=0, a_max=np.inf) if option_type == CALL else np.clip(K - possible_prices, a_min=0, a_max=np.inf)
+    return np.array((np.sum(binom(N, p).pmf(number_of_upward_moves)*values)*np.exp(-r*T), 0.0)) # TODO: add greeks
+
+def calculate_option_crr(S_0, T, sigma, K, r, q=0., option_type=CALL, payoff_type=EUROPEAN, N=1000):
     """
     Values an european option with the binomial method. The underlying could be
     a stock, a exchange rate or a future. If it is a future, both r and q should
@@ -109,8 +135,10 @@ def value_european_option_binomial(S_0, T, sigma, K, r, q=0, kind='C', N=1000):
     q : float
         Constant continuous dividend yield, or constant foreign risk free rate 
         in the case of FX options.
-    kind : String, optional
-        'C' for call option, anything else for put option. The default is 'C'.
+    option_type : int, optional
+        Either CALL (=0) or PUT (=1)
+    payoff_type : int, optional
+        Either EUROPEAN (=0) or AMERICAN (=1)
     N : int, optional
         Number of steps. Increase it to get a better approximation of the value
         of the option, although it can require a lot of memory. 
@@ -122,15 +150,19 @@ def value_european_option_binomial(S_0, T, sigma, K, r, q=0, kind='C', N=1000):
         Value of the option in monetary units.
 
     """
-    dt = T/float(N)
-    u = np.exp(sigma*np.sqrt(dt))
-    d = 1/u
-    a = np.exp((r-q)*dt)
-    p = (a - d)/(u - d)
-    S = _build_underlying_matrix(S_0, u, N)
-    P = _build_probabilities(p, N, N)
-    payoffs = _european_payoffs(S, K, kind)
-    return sum(payoffs*P)*np.exp(-r*T)
+    
+    if not option_type in [CALL, PUT]:
+        raise Exception(f"Only valid option types are {CALL} or {PUT}, but got {option_type}")
+    if not payoff_type in [EUROPEAN, AMERICAN]:
+        raise Exception(f"Only valid option types are {EUROPEAN} or {AMERICAN}, but got {payoff_type}")
+    
+    if payoff_type == EUROPEAN:
+        value, delta = _calculate_european_option_crr(S_0, T, sigma, K, r, q=q, option_type=option_type, N=N)
+    else:
+        value, delta = _calculate_american_option_crr(S_0, T, sigma, K, r, q=q, option_type=option_type, N=N)
+    return value, delta
+
+
 
 def calculate_u(sigma, dt, r):
     """
@@ -198,21 +230,151 @@ def value_european_option_BS(S_0, T, sigma, K, r, q=0, kind='C'):
         value = K*np.exp(-r*T)*N(-d2) - S_0*np.exp(-q*T)*N(-d1)
     return value
 
+@njit(float64[:](float64, float64, float64, float64, int64, float64, int64,
+                 float64), fastmath=True, cache=True)
+def crr_tree_val(stock_price,
+                 ccInterestRate,  # continuously compounded
+                 ccDividendRate,  # continuously compounded
+                 volatility,  # Black scholes volatility
+                 num_steps_per_year,
+                 time_to_expiry,
+                 option_type,
+                 strike_price):
+    """ Value an American option using a Binomial Treee """
+
+    # num_steps = int(num_steps_per_year * time_to_expiry)
+
+    # if num_steps < 30:
+    #     num_steps = 30
+
+    # OVERRIDE JUST TO SEE
+    num_steps = num_steps_per_year
+
+#    print(num_steps)
+    # this is the size of the step
+    dt = time_to_expiry / num_steps
+    r = ccInterestRate
+    q = ccDividendRate
+
+    # the number of nodes on the tree
+    num_nodes = int(0.5 * (num_steps + 1) * (num_steps + 2))
+    stock_values = np.zeros(num_nodes)
+    stock_values[0] = stock_price
+
+    option_values = np.zeros(num_nodes)
+    u = np.exp(volatility * np.sqrt(dt))
+    d = 1.0 / u
+    sLow = stock_price
+
+    probs = np.zeros(num_steps)
+    periodDiscountFactors = np.zeros(num_steps)
+
+    # store time independent information for later use in tree
+    for iTime in range(0, num_steps):
+        a = np.exp((r - q) * dt)
+        probs[iTime] = (a - d) / (u - d)
+        periodDiscountFactors[iTime] = np.exp(-r * dt)
+
+    for iTime in range(1, num_steps + 1):
+        sLow *= d
+        s = sLow
+        for iNode in range(0, iTime + 1):
+            index = 0.5 * iTime * (iTime + 1)
+            stock_values[int(index + iNode)] = s
+            s = s * (u * u)
+
+    # work backwards by first setting values at expiry date
+    index = int(0.5 * num_steps * (num_steps + 1))
+
+    for iNode in range(0, iTime + 1):
+
+        s = stock_values[index + iNode]
+
+        if option_type == 0: # EUROPEAN CALL
+            option_values[index + iNode] = np.maximum(s - strike_price, 0.0)
+        elif option_type == 1:# EUROPEAN PUT
+            option_values[index + iNode] = np.maximum(strike_price - s, 0.0)
+        elif option_type == 2: # AMERICAN CALL
+            option_values[index + iNode] = np.maximum(s - strike_price, 0.0)
+        elif option_type == 3:
+            option_values[index + iNode] = np.maximum(strike_price - s, 0.0)
+
+    # begin backward steps from expiry to value date
+    for iTime in range(num_steps - 1, -1, -1):
+
+        index = int(0.5 * iTime * (iTime + 1))
+
+        for iNode in range(0, iTime + 1):
+
+            s = stock_values[index + iNode]
+
+            exerciseValue = 0.0
+
+            if option_type == 0:
+                exerciseValue = 0.0
+            elif option_type == 1:
+                exerciseValue = 0.0
+            elif option_type == 2:
+                exerciseValue = np.maximum(s - strike_price, 0.0)
+            elif option_type == 3:
+                exerciseValue = np.maximum(strike_price - s, 0.0)
+
+            nextIndex = int(0.5 * (iTime + 1) * (iTime + 2))
+
+            nextNodeDn = nextIndex + iNode
+            nextNodeUp = nextIndex + iNode + 1
+
+            vUp = option_values[nextNodeUp]
+            vDn = option_values[nextNodeDn]
+            futureExpectedValue = probs[iTime] * vUp
+            futureExpectedValue += (1.0 - probs[iTime]) * vDn
+            holdValue = periodDiscountFactors[iTime] * futureExpectedValue
+
+            if option_type == 0:
+                option_values[index + iNode] = holdValue
+            elif option_type == 1:
+                option_values[index + iNode] = holdValue
+            elif option_type == 2:
+                option_values[index +
+                              iNode] = np.maximum(exerciseValue, holdValue)
+            elif option_type == 3:
+                option_values[index +
+                              iNode] = np.maximum(exerciseValue, holdValue)
+
+    # We calculate all of the important Greeks in one go
+    price = option_values[0]
+    delta = (option_values[2] - option_values[1]) / \
+        (stock_values[2] - stock_values[1])
+    deltaUp = (option_values[5] - option_values[4]) / \
+        (stock_values[5] - stock_values[4])
+    deltaDn = (option_values[4] - option_values[3]) / \
+        (stock_values[4] - stock_values[3])
+    gamma = (deltaUp - deltaDn) / (stock_values[2] - stock_values[1])
+    theta = (option_values[4] - option_values[0]) / (2.0 * dt)
+    results = np.array([price, delta, gamma, theta])
+    return results
+
 if __name__=='__main__':
     import matplotlib.pyplot as plt
-    Ns = np.arange(2, 501)
-    S_0 = 50
-    T = 2.
-    r = 0.05
-    q = 0.
-    sigma = 0.3
-    K = 52
-    values = [value_european_option_binomial(S_0=S_0, T=T, sigma=sigma, K=K, r=r, q=q, kind='P', N=n) for n in Ns]
-    print(values)
-    bs_value = value_european_option_BS(S_0=S_0, T=T, sigma=sigma, K=K, r=r, q=q, kind='P')
+    Ns = np.arange(5,60)
+    S_0 = 50.
+    T = 5./12.
+    r = 0.1
+    q = 0.0
+    sigma = 0.4
+    K = 50.
+    kind='P'
+    option_type = PUT
+    payoff_type = AMERICAN
+    
+    bs_value = value_european_option_BS(S_0=S_0, T=T, sigma=sigma, K=K, r=r, q=q, kind=kind)
+    crr_values = [calculate_option_crr(S_0=S_0, T=T, sigma=sigma, K=K, r=r, q=q, option_type=option_type, payoff_type=payoff_type , N=n)[0] for n in Ns]
+    finpy_values = [crr_tree_val(S_0, r, q, sigma, i, T, 3, K)[0] for i in Ns]
+    
     fig, ax = plt.subplots()
     ax.plot(Ns, np.repeat(bs_value, len(Ns)), label='Black Scholes')
-    ax.plot(Ns, values, label='Binomial', lw=0.5)
+    ax.plot(Ns, crr_values, label='CRR', lw=1)
+    ax.plot(Ns, finpy_values, label='Finpy', lw=0.5)
     ax.set_xlabel('Number of timesteps')
     ax.set_ylabel('Value')
     ax.legend()
