@@ -230,6 +230,7 @@ def value_european_option_BS(S_0, T, sigma, K, r, q=0, kind='C'):
         value = K*np.exp(-r*T)*N(-d2) - S_0*np.exp(-q*T)*N(-d1)
     return value
 
+# This is taken from financepy to test my own functions and compare speeds
 @njit(float64[:](float64, float64, float64, float64, int64, float64, int64,
                  float64), fastmath=True, cache=True)
 def crr_tree_val(stock_price,
