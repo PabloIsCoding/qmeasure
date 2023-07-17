@@ -97,10 +97,14 @@ def _calculate_american_option_crr(S_0, T, sigma, K, r, q=0., option_type=CALL, 
         expected_values = (values[:-1]*p + np.roll(values, -1)[:-1]*(1-p))*discount_dt # Values at N-i without exercising early
         payoff = np.clip((possible_prices - K)*option_coef, a_min=0, a_max=np.inf) # early exercise
         values = np.maximum(payoff, expected_values) # Values at N-i, possibly exercising early
-
+        if i == N-2:
+            denominator = 0.5*(possible_prices[0]-possible_prices[2])
+            gamma = ((values[0] - values[1])/(possible_prices[0]-S_0) - (values[1] - values[2])/(S_0 - possible_prices[2]))/denominator
+            aux = values[1] # save for theta calculation
         if i == N-1:
-            delta = (values[1] - values[0])/(possible_prices[0] - possible_prices[1])*option_coef
-    return np.array((values[0], delta))
+            delta = (values[0] - values[1])/(possible_prices[1] - possible_prices[0])*option_coef
+    theta = (aux - values[0])/(2*dt)
+    return np.array((values[0], delta, gamma, theta))
 
 def _calculate_european_option_crr(S_0, T, sigma, K, r, q=0., option_type=CALL, N=1000):
     dt = T/float(N)
@@ -111,7 +115,7 @@ def _calculate_european_option_crr(S_0, T, sigma, K, r, q=0., option_type=CALL, 
     number_of_upward_moves = np.arange(N, -1, -1) # [0, ..., N]
     possible_prices = S_0 * u**number_of_upward_moves * d**(N-number_of_upward_moves)
     values = np.clip(possible_prices - K, a_min=0, a_max=np.inf) if option_type == CALL else np.clip(K - possible_prices, a_min=0, a_max=np.inf)
-    return np.array((np.sum(binom(N, p).pmf(number_of_upward_moves)*values)*np.exp(-r*T), 0.0)) # TODO: add greeks
+    return np.array((np.sum(binom(N, p).pmf(number_of_upward_moves)*values)*np.exp(-r*T), 0.0, 0.0, 0.0)) # TODO: add greeks
 
 def calculate_option_crr(S_0, T, sigma, K, r, q=0., option_type=CALL, payoff_type=EUROPEAN, N=1000):
     """
@@ -157,10 +161,10 @@ def calculate_option_crr(S_0, T, sigma, K, r, q=0., option_type=CALL, payoff_typ
         raise Exception(f"Only valid option types are {EUROPEAN} or {AMERICAN}, but got {payoff_type}")
     
     if payoff_type == EUROPEAN:
-        value, delta = _calculate_european_option_crr(S_0, T, sigma, K, r, q=q, option_type=option_type, N=N)
+        value, delta, gamma, theta = _calculate_european_option_crr(S_0, T, sigma, K, r, q=q, option_type=option_type, N=N)
     else:
-        value, delta = _calculate_american_option_crr(S_0, T, sigma, K, r, q=q, option_type=option_type, N=N)
-    return value, delta
+        value, delta, gamma, theta = _calculate_american_option_crr(S_0, T, sigma, K, r, q=q, option_type=option_type, N=N)
+    return value, delta, gamma, theta
 
 
 
@@ -193,7 +197,7 @@ def calculate_u(sigma, dt, r):
     u2 = 1/2*e**(-r*dt)*(np.sqrt((sigma**2*(-dt) - e**(2*r*dt) - 1)**2 - 4*e**(2*r*dt)) + sigma**2*dt + e**(2*r*dt) + 1)
     return u1, u2
 
-def value_european_option_BS(S_0, T, sigma, K, r, q=0, kind='C'):
+def value_european_option_BS(S_0, T, sigma, K, r, q=0, option_type=CALL):
     """
     Value of a european option according to the Black-Scholes model.
 
@@ -221,10 +225,12 @@ def value_european_option_BS(S_0, T, sigma, K, r, q=0, kind='C'):
         Value of the option in monetary units.
 
     """
+    if not option_type in [CALL, PUT]:
+        raise Exception(f"Only valid option types are {CALL} or {PUT}, but got {option_type}")
     d1 = (np.log(S_0/K) + (r-q+sigma**2/2)*T)/(sigma*np.sqrt(T))
     d2 = d1 - sigma*np.sqrt(T)
     N = norm.cdf
-    if kind=='C':
+    if option_type==CALL:
         value = S_0*np.exp(-q*T)*N(d1) - K*np.exp(-r*T)*N(d2)
     else:
         value = K*np.exp(-r*T)*N(-d2) - S_0*np.exp(-q*T)*N(-d1)
@@ -364,11 +370,10 @@ if __name__=='__main__':
     q = 0.0
     sigma = 0.4
     K = 50.
-    kind='P'
     option_type = PUT
     payoff_type = AMERICAN
     
-    bs_value = value_european_option_BS(S_0=S_0, T=T, sigma=sigma, K=K, r=r, q=q, kind=kind)
+    bs_value = value_european_option_BS(S_0=S_0, T=T, sigma=sigma, K=K, r=r, q=q, option_type=option_type)
     crr_values = [calculate_option_crr(S_0=S_0, T=T, sigma=sigma, K=K, r=r, q=q, option_type=option_type, payoff_type=payoff_type , N=n)[0] for n in Ns]
     finpy_values = [crr_tree_val(S_0, r, q, sigma, i, T, 3, K)[0] for i in Ns]
     
@@ -376,6 +381,16 @@ if __name__=='__main__':
     ax.plot(Ns, np.repeat(bs_value, len(Ns)), label='Black Scholes')
     ax.plot(Ns, crr_values, label='CRR', lw=1)
     ax.plot(Ns, finpy_values, label='Finpy', lw=0.5)
+    ax.set_xlabel('Number of timesteps')
+    ax.set_ylabel('Value')
+    ax.legend()
+    
+    
+    crr_gammas = [calculate_option_crr(S_0=S_0, T=T, sigma=sigma, K=K, r=r, q=q, option_type=option_type, payoff_type=payoff_type , N=n)[2] for n in Ns]
+    finpy_gammas = [crr_tree_val(S_0, r, q, sigma, i, T, 3, K)[2] for i in Ns]
+    fig, ax = plt.subplots()
+    ax.plot(Ns, crr_gammas, label='CRR gammas', lw=1)
+    ax.plot(Ns, finpy_gammas, label='Finpy gammas', lw=0.5) # TODO: check if these gammas are different due to different estimator or if there is bug
     ax.set_xlabel('Number of timesteps')
     ax.set_ylabel('Value')
     ax.legend()
