@@ -90,16 +90,16 @@ def _calculate_american_option_crr(S_0, T, sigma, K, r, q=0., option_type=CALL, 
     number_of_upward_moves = np.arange(N, -1, -1) # [0, ..., N]
     possible_prices = S_0 * u**number_of_upward_moves * d**(N-number_of_upward_moves)
     discount_dt = np.exp(-r*dt)
-    values = np.clip(possible_prices - K, a_min=0, a_max=np.inf) if option_type == CALL else np.clip(K - possible_prices, a_min=0, a_max=np.inf)
     option_coef = 1 if option_type == CALL else -1
+    values = np.clip((possible_prices - K)*option_coef, a_min=0, a_max=np.inf) # Payoff in t=T
     for i in range(1, N+1):
         possible_prices = possible_prices[:-1] / u
-        expected_values = (values[:-1]*p + np.roll(values, -1)[:-1]*(1-p))*discount_dt # Values at N-i without exercising early
+        expected_values = (p*values[:-1] + (1-p)*values[1:])*discount_dt # Values at N-i without exercising early
         payoff = np.clip((possible_prices - K)*option_coef, a_min=0, a_max=np.inf) # early exercise
         values = np.maximum(payoff, expected_values) # Values at N-i, possibly exercising early
         if i == N-2:
             denominator = 0.5*(possible_prices[0]-possible_prices[2])
-            gamma = ((values[0] - values[1])/(possible_prices[0]-S_0) - (values[1] - values[2])/(S_0 - possible_prices[2]))/denominator
+            gamma = ((values[0] - values[1])/(possible_prices[0]-S_0) - (values[1] - values[2])/(S_0 - possible_prices[2]))/denominator # TODO: verify if this gamma is correct
             aux = values[1] # save for theta calculation
         if i == N-1:
             delta = (values[0] - values[1])/(possible_prices[1] - possible_prices[0])*option_coef
@@ -365,7 +365,7 @@ if __name__=='__main__':
     import matplotlib.pyplot as plt
     Ns = np.arange(5,60)
     S_0 = 50.
-    T = 5./12.
+    T = 1
     r = 0.1
     q = 0.0
     sigma = 0.4
