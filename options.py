@@ -101,7 +101,7 @@ def _calculate_american_option_crr(S_0, T, sigma, K, r, q=0., option_type=CALL, 
             denominator = 0.5*(possible_prices[0]-possible_prices[2])
             delta_up = (values[0] - values[1])/(possible_prices[0] - possible_prices[1])
             delta_down = (values[1] - values[2])/(possible_prices[1] - possible_prices[2])
-            gamma = (delta_up - delta_down)/denominator#((values[0] - values[1])/(possible_prices[0]-S_0) - (values[1] - values[2])/(S_0 - possible_prices[2]))/denominator # TODO: verify if this gamma is correct
+            gamma = (delta_up - delta_down)/denominator
             aux = values[1] # save for theta calculation
         if i == N-1:
             delta = (values[0] - values[1])/(possible_prices[1] - possible_prices[0])*option_coef
