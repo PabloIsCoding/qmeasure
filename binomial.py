@@ -99,7 +99,9 @@ def _calculate_american_option_crr(S_0, T, sigma, K, r, q=0., option_type=CALL, 
         values = np.maximum(payoff, expected_values) # Values at N-i, possibly exercising early
         if i == N-2:
             denominator = 0.5*(possible_prices[0]-possible_prices[2])
-            gamma = ((values[0] - values[1])/(possible_prices[0]-S_0) - (values[1] - values[2])/(S_0 - possible_prices[2]))/denominator # TODO: verify if this gamma is correct
+            delta_up = (values[0] - values[1])/(possible_prices[0] - possible_prices[1])
+            delta_down = (values[1] - values[2])/(possible_prices[1] - possible_prices[2])
+            gamma = (delta_up - delta_down)/denominator#((values[0] - values[1])/(possible_prices[0]-S_0) - (values[1] - values[2])/(S_0 - possible_prices[2]))/denominator # TODO: verify if this gamma is correct
             aux = values[1] # save for theta calculation
         if i == N-1:
             delta = (values[0] - values[1])/(possible_prices[1] - possible_prices[0])*option_coef
@@ -258,10 +260,15 @@ def value_european_option_BS(S_0, T, sigma, K, r, q=0, option_type=CALL):
     d2 = d1 - sigma*np.sqrt(T)
     N = norm.cdf
     if option_type==CALL:
-        value = S_0*np.exp(-q*T)*N(d1) - K*np.exp(-r*T)*N(d2)
+        delta = N(d1)
+        value = S_0*np.exp(-q*T)*delta - K*np.exp(-r*T)*N(d2)
+        theta = -(S_0*norm.pdf(d1)*sigma)/(2*np.sqrt(T)) - r*K*np.exp(-r*T)*N(d2)
     else:
+        delta = N(d1) - 1
         value = K*np.exp(-r*T)*N(-d2) - S_0*np.exp(-q*T)*N(-d1)
-    return value
+        theta = -(S_0*norm.pdf(d1)*sigma)/(2*np.sqrt(T)) + r*K*np.exp(-r*T)*N(-d2)
+    gamma = norm.pdf(d1)/(S_0*sigma*np.sqrt(T))
+    return value, delta, gamma, theta
 
 # This is taken from financepy to test my own functions and compare speeds
 @njit(float64[:](float64, float64, float64, float64, int64, float64, int64,
@@ -391,7 +398,7 @@ def crr_tree_val(stock_price,
 if __name__=='__main__':
     import matplotlib.pyplot as plt
     
-    aux = 2**np.arange(1, 18)
+    aux = 2**np.arange(1, 10)
     Ns = np.sort(np.concatenate((aux, aux+1, aux[1:]+2)))
     S_0 = 50.
     T = 1
@@ -402,58 +409,65 @@ if __name__=='__main__':
     option_type = PUT
     payoff_type = AMERICAN
     
-#     bs_value = value_european_option_BS(S_0=S_0, T=T, sigma=sigma, K=K, r=r, q=q, option_type=option_type)
-#     somewhat_true_values = [calculate_option_crr(S_0=S_0, T=T, sigma=sigma, K=K, r=r, q=q,
-#                                                  option_type=option_type, payoff_type=payoff_type , N=n)[0] for n in range(100_000, 100_005)]
-#     somewhat_true_value = np.mean(somewhat_true_values)
-#     crr_values = np.array([calculate_option_crr(S_0=S_0, T=T, sigma=sigma, K=K, r=r, q=q, option_type=option_type, payoff_type=payoff_type , N=n)[0] for n in Ns])
-#     trinomial_values = np.array([_calculate_american_option_trinomial(S_0=S_0, T=T, sigma=sigma, K=K, r=r, q=q, option_type=option_type, N=n) for n in Ns])
-#     #finpy_values = [crr_tree_val(S_0, r, q, sigma, i, T, 3, K)[0] for i in Ns]
-#     
-#     
-#     fig, ax = plt.subplots()
-#     ax.plot(Ns, np.repeat(somewhat_true_value, len(Ns)), label='Kinda true value')
-#     ax.scatter(Ns, crr_values, label='CRR', lw=1)
-#     ax.scatter(Ns, trinomial_values, label='Trinomial', lw=0.5)
-#     #ax.plot(Ns, finpy_values, label='Finpy', lw=0.5)
-#     ax.set_xlabel('Number of timesteps')
-#     ax.set_ylabel('Value')
-#     ax.legend()
-#     ax.set_xscale('log', base=10)
-#     plt.show()
-#     
-#     fig, ax = plt.subplots()
-#     ax.plot(Ns, abs(crr_values - somewhat_true_value), label='CRR', lw=1)
-#     ax.plot(Ns, abs(trinomial_values - somewhat_true_value), label='Trinomial', lw=0.5)
-#     #ax.plot(Ns, finpy_values, label='Finpy', lw=0.5)
-#     ax.set_xlabel('Number of timesteps')
-#     ax.set_ylabel('Value')
-#     ax.legend()
-#     ax.set_yscale('log', base=10)
-#     ax.set_xscale('log', base=2)
-#     plt.show()
+    EUROPEAN_CALL, EUROPEAN_PUT, AMERICAN_CALL, AMERICAN_PUT = range(4) # For finpy
     
-    from datetime import datetime as dt
-    Ns = np.arange(1000, 10000)
-    times_crr = np.zeros(len(Ns))
-    times_trinomial = np.zeros(len(Ns))
-    for i, n in enumerate(Ns):
-        t1 = dt.now()
-        _ = calculate_option_crr(S_0=S_0, T=T, sigma=sigma, K=K, r=r, q=q, option_type=option_type, payoff_type=payoff_type , N=n);
-        times_crr[i] = (dt.now()-t1).total_seconds()
-        
-        t1 = dt.now()
-        _ = _calculate_american_option_trinomial(S_0=S_0, T=T, sigma=sigma, K=K, r=r, q=q, option_type=option_type , N=n);
-        times_trinomial[i] = (dt.now()-t1).total_seconds()
-        
+    
+    # Price plot
+    bs_value = value_european_option_BS(S_0=S_0, T=T, sigma=sigma, K=K, r=r, q=q, option_type=option_type)
+    crr_values = np.array([calculate_option_crr(S_0=S_0, T=T, sigma=sigma, K=K, r=r, q=q, option_type=option_type, payoff_type=payoff_type , N=n)[0] for n in Ns])
+    trinomial_values = np.array([_calculate_american_option_trinomial(S_0=S_0, T=T, sigma=sigma, K=K, r=r, q=q, option_type=option_type, N=n) for n in Ns])
+    finpy_values = np.array([crr_tree_val(S_0, r, q, sigma, n, T, 3, K)[0] for n in Ns])
+    
+    
     fig, ax = plt.subplots()
-    ax.plot(Ns, times_crr*1000, label='CRR')
-    ax.plot(Ns, times_trinomial*1000, label='Trinomial')
-    ax.legend()
-    ax.set_ylabel('milliseconds')
+    ax.scatter(Ns, crr_values, label='CRR', lw=1)
+    ax.scatter(Ns, trinomial_values, label='Trinomial', lw=0.5)
+    ax.scatter(Ns, finpy_values, label='Finpy', lw=0.5)
     ax.set_xlabel('Number of timesteps')
-    #ax.set_xscale('log', base=2)
+    ax.set_ylabel('Value')
+    ax.legend()
+    ax.set_xscale('log', base=10)
     plt.show()
+    
+    # gamma plot
+    Ns = np.arange(3, 1000)
+    bsm_gamma = value_european_option_BS(S_0=S_0, T=T, sigma=sigma, K=K, r=r, q=q, option_type=option_type)[2]
+    bsm_gamma = np.repeat(bsm_gamma, len(Ns))
+    crr_gammas = np.array([_calculate_american_option_crr(S_0=S_0, T=T, sigma=sigma, K=K, r=r, q=q, option_type=option_type, N=n)[2] for n in Ns])
+    finpy_gammas = np.array([crr_tree_val(S_0, r, q, sigma, n, T, AMERICAN_PUT, K)[2] for n in Ns])
+    
+    
+    fig, ax = plt.subplots()
+    ax.plot(Ns, bsm_gamma, label='BSM gamma (European', color='black')
+    ax.plot(Ns, crr_gammas, label='CRR', lw=1)
+    ax.plot(Ns, finpy_gammas, label='Finpy', lw=0.5)
+    ax.set_xlabel('Number of timesteps')
+    ax.set_ylabel('Value')
+    ax.set_title(f'Gamma')
+    ax.legend()
+    plt.show()
+    
+#     from datetime import datetime as dt
+#     Ns = np.arange(10, 100)
+#     times_crr = np.zeros(len(Ns))
+#     times_trinomial = np.zeros(len(Ns))
+#     for i, n in enumerate(Ns):
+#         t1 = dt.now()
+#         _ = calculate_option_crr(S_0=S_0, T=T, sigma=sigma, K=K, r=r, q=q, option_type=option_type, payoff_type=payoff_type , N=n);
+#         times_crr[i] = (dt.now()-t1).total_seconds()
+#         
+#         t1 = dt.now()
+#         _ = _calculate_american_option_trinomial(S_0=S_0, T=T, sigma=sigma, K=K, r=r, q=q, option_type=option_type , N=n);
+#         times_trinomial[i] = (dt.now()-t1).total_seconds()
+#         
+#     fig, ax = plt.subplots()
+#     ax.plot(Ns, times_crr*1000, label='CRR')
+#     ax.plot(Ns, times_trinomial*1000, label='Trinomial')
+#     ax.legend()
+#     ax.set_ylabel('milliseconds')
+#     ax.set_xlabel('Number of timesteps')
+#     #ax.set_xscale('log', base=2)
+#     plt.show()
     
     
 #     crr_gammas = [calculate_option_crr(S_0=S_0, T=T, sigma=sigma, K=K, r=r, q=q, option_type=option_type, payoff_type=payoff_type , N=n)[2] for n in Ns]
