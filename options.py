@@ -408,15 +408,21 @@ if __name__=='__main__':
     K = 50
     option_type = CALL
     payoff_type = AMERICAN
-    
-    EUROPEAN_CALL, EUROPEAN_PUT, AMERICAN_CALL, AMERICAN_PUT = range(4) # For finpy
-    
+        
+    if payoff_type == EUROPEAN and option_type == CALL:
+        finpy_option = 0
+    elif payoff_type == EUROPEAN and option_type == PUT:
+        finpy_option = 1
+    elif payoff_type == AMERICAN and option_type == CALL:
+        finpy_option = 2
+    else:
+        finpy_option = 3
     
     # Price plot
     bs_value = value_european_option_BS(S_0=S_0, T=T, sigma=sigma, K=K, r=r, q=q, option_type=option_type)
     crr_values = np.array([calculate_option_crr(S_0=S_0, T=T, sigma=sigma, K=K, r=r, q=q, option_type=option_type, payoff_type=payoff_type , N=n)[0] for n in Ns])
     trinomial_values = np.array([_calculate_american_option_trinomial(S_0=S_0, T=T, sigma=sigma, K=K, r=r, q=q, option_type=option_type, N=n) for n in Ns])
-    finpy_values = np.array([crr_tree_val(S_0, r, q, sigma, n, T, 3, K)[0] for n in Ns])
+    finpy_values = np.array([crr_tree_val(S_0, r, q, sigma, n, T, finpy_option, K)[0] for n in Ns])
     
     
     fig, ax = plt.subplots()
@@ -434,11 +440,11 @@ if __name__=='__main__':
     bsm_gamma = value_european_option_BS(S_0=S_0, T=T, sigma=sigma, K=K, r=r, q=q, option_type=option_type)[2]
     bsm_gamma = np.repeat(bsm_gamma, len(Ns))
     crr_gammas = np.array([_calculate_american_option_crr(S_0=S_0, T=T, sigma=sigma, K=K, r=r, q=q, option_type=option_type, N=n)[2] for n in Ns])
-    finpy_gammas = np.array([crr_tree_val(S_0, r, q, sigma, n, T, AMERICAN_PUT, K)[2] for n in Ns])
+    finpy_gammas = np.array([crr_tree_val(S_0, r, q, sigma, n, T, finpy_option, K)[2] for n in Ns])
     
     
     fig, ax = plt.subplots()
-    ax.plot(Ns, bsm_gamma, label='BSM gamma (European', color='black')
+    ax.plot(Ns, bsm_gamma, label='BSM gamma (European)', color='black')
     ax.plot(Ns, crr_gammas, label='CRR', lw=1)
     ax.plot(Ns, finpy_gammas, label='Finpy', lw=0.5)
     ax.set_xlabel('Number of timesteps')
@@ -451,7 +457,7 @@ if __name__=='__main__':
     N = 1000
     sigmas = np.arange(0.1, 0.55, 0.05)
     crr_deltas = np.array([_calculate_american_option_crr(S_0=S_0, T=T, sigma=s, K=K, r=r, q=q, option_type=option_type, N=N)[1] for s in sigmas])
-    finpy_deltas = np.array([crr_tree_val(S_0, r, q, s, N, T, AMERICAN_CALL, K)[1] for s in sigmas])
+    finpy_deltas = np.array([crr_tree_val(S_0, r, q, s, N, T, finpy_option, K)[1] for s in sigmas])
     
     fig, ax = plt.subplots()
     ax.plot(sigmas, crr_deltas, label='CRR delta', lw=1)
@@ -484,7 +490,7 @@ if __name__=='__main__':
     
     
 #     crr_gammas = [calculate_option_crr(S_0=S_0, T=T, sigma=sigma, K=K, r=r, q=q, option_type=option_type, payoff_type=payoff_type , N=n)[2] for n in Ns]
-#     finpy_gammas = [crr_tree_val(S_0, r, q, sigma, i, T, 3, K)[2] for i in Ns]
+#     finpy_gammas = [crr_tree_val(S_0, r, q, sigma, i, T, finpy_option, K)[2] for i in Ns]
 #     fig, ax = plt.subplots()
 #     ax.plot(Ns, crr_gammas, label='CRR gammas', lw=1)
 #     ax.plot(Ns, finpy_gammas, label='Finpy gammas', lw=0.5) # TODO: check if these gammas are different due to different estimator or if there is bug
