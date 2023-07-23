@@ -104,7 +104,7 @@ def _calculate_american_option_crr(S_0, T, sigma, K, r, q=0., option_type=CALL, 
             gamma = (delta_up - delta_down)/denominator
             aux = values[1] # save for theta calculation
         if i == N-1:
-            delta = (values[0] - values[1])/(possible_prices[1] - possible_prices[0])*option_coef
+            delta = (values[0] - values[1])/(possible_prices[0] - possible_prices[1])*option_coef
     theta = (aux - values[0])/(2*dt)
     return np.array((values[0], delta, gamma, theta))
 
@@ -405,8 +405,8 @@ if __name__=='__main__':
     r = 0.1
     q = 0.0
     sigma = 0.4
-    K = 30.
-    option_type = PUT
+    K = 50
+    option_type = CALL
     payoff_type = AMERICAN
     
     EUROPEAN_CALL, EUROPEAN_PUT, AMERICAN_CALL, AMERICAN_PUT = range(4) # For finpy
@@ -447,6 +447,19 @@ if __name__=='__main__':
     ax.legend()
     plt.show()
     
+    # delta as a function of volatility plot
+    N = 1000
+    sigmas = np.arange(0.1, 0.55, 0.05)
+    crr_deltas = np.array([_calculate_american_option_crr(S_0=S_0, T=T, sigma=s, K=K, r=r, q=q, option_type=option_type, N=N)[1] for s in sigmas])
+    finpy_deltas = np.array([crr_tree_val(S_0, r, q, s, N, T, AMERICAN_CALL, K)[1] for s in sigmas])
+    
+    fig, ax = plt.subplots()
+    ax.plot(sigmas, crr_deltas, label='CRR delta', lw=1)
+    ax.plot(sigmas, finpy_deltas, label='Finpy delta', lw=1)
+    ax.set_xlabel('Volatility')
+    ax.set_ylabel('Delta')
+    ax.legend()
+    plt.show()
 #     from datetime import datetime as dt
 #     Ns = np.arange(10, 100)
 #     times_crr = np.zeros(len(Ns))
