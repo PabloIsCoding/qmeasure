@@ -168,16 +168,8 @@ def calculate_option_crr(S_0, T, sigma, K, r, q=0., option_type=CALL, payoff_typ
         value, delta, gamma, theta = _calculate_american_option_crr(S_0, T, sigma, K, r, q=q, option_type=option_type, N=N)
     return value, delta, gamma, theta
 
-@njit(float64(float64, float64, float64, float64, float64, float64, int64, int64), fastmath=True, cache=True)
-def _calculate_american_option_trinomial(S_0, T, sigma, K, r, q=0., option_type=CALL, N=1000): # TO-DO: Try the Kamrad-Ritchken model, add greeks
-    dt = T/float(N)
-    u = np.exp(sigma*np.sqrt(2*dt))
-    d = 1/u
-    a = np.exp((r-q)*dt/2)
-    c = np.exp(-sigma*np.sqrt(dt/2))
-    pu = ((a - c)/(1/c - c))**2
-    pd = (-(a-1/c)/(1/c-c))**2
-    pm = 1-pu-pd
+@njit(float64[:](float64, float64, float64, float64, float64, float64, float64, float64, float64, float64, float64, float64, int64, int64), fastmath=True, cache=True)
+def _calculate_american_option_trinomial(S_0, T, sigma, K, r, q, u, d, pu, pd, pm, dt, option_type, N): # TO-DO: Try the Kamrad-Ritchken model, add greeks
     number_of_upward_moves = np.arange(N, -N-1, -1) # [N, ..., 0, ..., -N]
     possible_prices = S_0 * u**number_of_upward_moves # [S_0*u**N, ..., S_0, ..., S_0*u**(-N)]
     discount_dt = np.exp(-r*dt)
@@ -188,14 +180,46 @@ def _calculate_american_option_trinomial(S_0, T, sigma, K, r, q=0., option_type=
         expected_values = (pu*values[:-2] + pm*values[1:-1] + pd*values[2:])*discount_dt # Values at N-i without exercising early
         payoff = np.clip((possible_prices - K)*option_coef, a_min=0, a_max=np.inf) # early exercise
         values = np.maximum(payoff, expected_values) # Values at N-i, possibly exercising early
-#         if i == N-2:
-#             denominator = 0.5*(possible_prices[0]-possible_prices[2])
-#             gamma = ((values[0] - values[1])/(possible_prices[0]-S_0) - (values[1] - values[2])/(S_0 - possible_prices[2]))/denominator # TODO: verify if this gamma is correct
-#             aux = values[1] # save for theta calculation
-#         if i == N-1:
-#             delta = (values[0] - values[1])/(possible_prices[1] - possible_prices[0])*option_coef
-#     theta = (aux - values[0])/(2*dt)
-    return values[0]#np.array((values[0], delta, gamma, theta))
+        if i == N-1:
+            delta = (values[0] - values[2])/(possible_prices[0] - possible_prices[2])*option_coef
+            delta_up = (values[0] - values[1]) / (possible_prices[0] - possible_prices[1])
+            delta_down = (values[1] - values[2]) / (possible_prices[1] - possible_prices[2])
+            gamma = (delta_up - delta_down) / ((possible_prices[0] - possible_prices[2]) / 2)
+            theta = values[1]
+    theta = (theta - values[0])/dt
+    return np.array((values[0], delta, gamma, theta))
+
+@njit(float64[:](float64, float64, float64, float64, float64, float64, int64, int64), fastmath=True, cache=True)
+def _calculate_american_option_trinomial_wikipedia(S_0, T, sigma, K, r, q=0., option_type=CALL, N=1000):
+    """
+    Trinomial model according to wikipedia, unknown original source, but it works.
+    """
+    dt = T/float(N)
+    u = np.exp(sigma*np.sqrt(2*dt))
+    d = 1/u
+    a = np.exp((r-q)*dt/2)
+    c = np.exp(-sigma*np.sqrt(dt/2))
+    pu = ((a - c)/(1/c - c))**2
+    pd = (-(a-1/c)/(1/c-c))**2
+    pm = 1-pu-pd
+    return _calculate_american_option_trinomial(S_0, T, sigma, K, r, q, u, d, pu, pd, pm, dt, option_type, N)
+
+@njit(float64[:](float64, float64, float64, float64, float64, float64, int64, int64), fastmath=True, cache=True)
+def _calculate_american_option_trinomial_clewlow_strickland(S_0, T, sigma, K, r, q=0., option_type=CALL, N=1000):
+    """
+    The trinomial model described in Energy Derivatives Pricing and Risk Management by Clewlow and Strickland
+    """
+    
+    dt = T/float(N)
+    dx = sigma*np.sqrt(3*dt)
+    u = np.exp(dx)
+    d = 1/u
+    nu = r - q - (sigma**2)/2
+    aux = (sigma**2*dt+nu**2*dt**2)/dx**2
+    pu = aux + nu*dt/dx
+    pm = 1-aux
+    pd = 1-(pu+pm)
+    return _calculate_american_option_trinomial(S_0, T, sigma, K, r, q, u, d, pu, pd, pm, dt, option_type, N)
 
 def calculate_u(sigma, dt, r):
     """
@@ -400,6 +424,7 @@ if __name__=='__main__':
     
     aux = 2**np.arange(1, 10)
     Ns = np.sort(np.concatenate((aux, aux+1, aux[1:]+2)))
+    Ns = range(3, 500)
     S_0 = 50.
     T = 1
     r = 0.1
@@ -421,35 +446,70 @@ if __name__=='__main__':
     # Price plot
     bs_value = value_european_option_BS(S_0=S_0, T=T, sigma=sigma, K=K, r=r, q=q, option_type=option_type)
     crr_values = np.array([calculate_option_crr(S_0=S_0, T=T, sigma=sigma, K=K, r=r, q=q, option_type=option_type, payoff_type=payoff_type , N=n)[0] for n in Ns])
-    trinomial_values = np.array([_calculate_american_option_trinomial(S_0=S_0, T=T, sigma=sigma, K=K, r=r, q=q, option_type=option_type, N=n) for n in Ns])
+    trinomial_values_CS = np.array([_calculate_american_option_trinomial_clewlow_strickland(S_0=S_0, T=T, sigma=sigma, K=K, r=r, q=q, option_type=option_type, N=n)[0] for n in Ns])
+    trinomial_values_wiki = np.array([_calculate_american_option_trinomial_wikipedia(S_0=S_0, T=T, sigma=sigma, K=K, r=r, q=q, option_type=option_type, N=n)[0] for n in Ns])
     finpy_values = np.array([crr_tree_val(S_0, r, q, sigma, n, T, finpy_option, K)[0] for n in Ns])
     
     
     fig, ax = plt.subplots()
-    ax.scatter(Ns, crr_values, label='CRR', lw=1)
-    ax.scatter(Ns, trinomial_values, label='Trinomial', lw=0.5)
-    ax.scatter(Ns, finpy_values, label='Finpy', lw=0.5)
+    ax.plot(Ns, crr_values, label='CRR', lw=1)
+    #ax.plot(Ns, trinomial_values_CS, label='Trinomial Clewlow Strickland', lw=0.7)
+    ax.plot(Ns, trinomial_values_wiki, label='Trinomial Wikipedia', lw=2)
+    ax.plot(Ns, finpy_values, label='Finpy', lw=0.3)
     ax.set_xlabel('Number of timesteps')
     ax.set_ylabel('Value')
     ax.legend()
-    ax.set_xscale('log', base=10)
     plt.show()
     
-    # gamma plot
-    Ns = np.arange(3, 1000)
-    bsm_gamma = value_european_option_BS(S_0=S_0, T=T, sigma=sigma, K=K, r=r, q=q, option_type=option_type)[2]
-    bsm_gamma = np.repeat(bsm_gamma, len(Ns))
-    crr_gammas = np.array([_calculate_american_option_crr(S_0=S_0, T=T, sigma=sigma, K=K, r=r, q=q, option_type=option_type, N=n)[2] for n in Ns])
-    finpy_gammas = np.array([crr_tree_val(S_0, r, q, sigma, n, T, finpy_option, K)[2] for n in Ns])
+    # delta plot
+    Ns = np.arange(3, 500)
+    crr_deltas = np.array([_calculate_american_option_crr(S_0=S_0, T=T, sigma=sigma, K=K, r=r, q=q, option_type=option_type, N=n)[1] for n in Ns])
+    finpy_deltas = np.array([crr_tree_val(S_0, r, q, sigma, n, T, finpy_option, K)[1] for n in Ns])
+    trinomial_wiki_deltas = np.array([_calculate_american_option_trinomial_wikipedia(S_0=S_0, T=T, sigma=sigma, K=K, r=r, q=q, option_type=option_type, N=n)[1] for n in Ns])
     
     
     fig, ax = plt.subplots()
-    ax.plot(Ns, bsm_gamma, label='BSM gamma (European)', color='black')
+    ax.plot(Ns, crr_deltas, label='CRR', lw=1)
+    ax.plot(Ns, finpy_deltas, label='Finpy', lw=0.5)
+    ax.plot(Ns, trinomial_wiki_deltas, label='Trinomial Wiki', lw=2)
+    ax.set_xlabel('Number of timesteps')
+    ax.set_ylabel('Value')
+    ax.set_title(f'Delta')
+    ax.legend()
+    plt.show()
+    
+    # gamma plot
+    Ns = np.arange(3, 500)
+    crr_gammas = np.array([_calculate_american_option_crr(S_0=S_0, T=T, sigma=sigma, K=K, r=r, q=q, option_type=option_type, N=n)[2] for n in Ns])
+    finpy_gammas = np.array([crr_tree_val(S_0, r, q, sigma, n, T, finpy_option, K)[2] for n in Ns])
+    trinomial_wiki_gammas = np.array([_calculate_american_option_trinomial_wikipedia(S_0=S_0, T=T, sigma=sigma, K=K, r=r, q=q, option_type=option_type, N=n)[2] for n in Ns])
+    
+    
+    fig, ax = plt.subplots()
     ax.plot(Ns, crr_gammas, label='CRR', lw=1)
     ax.plot(Ns, finpy_gammas, label='Finpy', lw=0.5)
+    ax.plot(Ns, trinomial_wiki_gammas, label='Trinomial Wiki', lw=2)
     ax.set_xlabel('Number of timesteps')
     ax.set_ylabel('Value')
     ax.set_title(f'Gamma')
+    ax.legend()
+    plt.show()
+    
+    
+    # theta plot
+    Ns = np.arange(3, 500)
+    crr_thetas = np.array([_calculate_american_option_crr(S_0=S_0, T=T, sigma=sigma, K=K, r=r, q=q, option_type=option_type, N=n)[3] for n in Ns])
+    finpy_thetas = np.array([crr_tree_val(S_0, r, q, sigma, n, T, finpy_option, K)[3] for n in Ns])
+    trinomial_wiki_thetas = np.array([_calculate_american_option_trinomial_wikipedia(S_0=S_0, T=T, sigma=sigma, K=K, r=r, q=q, option_type=option_type, N=n)[3] for n in Ns])
+    
+    
+    fig, ax = plt.subplots()
+    ax.plot(Ns, crr_thetas, label='CRR', lw=1)
+    ax.plot(Ns, finpy_thetas, label='Finpy', lw=0.5)
+    ax.plot(Ns, trinomial_wiki_thetas, label='Trinomial Wiki', lw=2)
+    ax.set_xlabel('Number of timesteps')
+    ax.set_ylabel('Value')
+    ax.set_title(f'Theta')
     ax.legend()
     plt.show()
     
@@ -458,10 +518,12 @@ if __name__=='__main__':
     sigmas = np.arange(0.1, 0.55, 0.05)
     crr_deltas = np.array([_calculate_american_option_crr(S_0=S_0, T=T, sigma=s, K=K, r=r, q=q, option_type=option_type, N=N)[1] for s in sigmas])
     finpy_deltas = np.array([crr_tree_val(S_0, r, q, s, N, T, finpy_option, K)[1] for s in sigmas])
+    trinomial_wiki_deltas = np.array([_calculate_american_option_trinomial_wikipedia(S_0=S_0, T=T, sigma=s, K=K, r=r, q=q, option_type=option_type, N=N)[1] for s in sigmas])
     
     fig, ax = plt.subplots()
     ax.plot(sigmas, crr_deltas, label='CRR delta', lw=1)
     ax.plot(sigmas, finpy_deltas, label='Finpy delta', lw=1)
+    ax.plot(sigmas, trinomial_wiki_deltas, label='Trinomial wiki delta', lw=1)
     ax.set_xlabel('Volatility')
     ax.set_ylabel('Delta')
     ax.legend()
